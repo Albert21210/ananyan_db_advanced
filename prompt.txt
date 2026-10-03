@@ -1,0 +1,8 @@
+Сгенерируй полный SQL-скрипт на PostgreSQL для базы данных метеорологических измерений, основываясь на следующей структуре: 
+-  users (id, username) 
+
+-  measurement_batches (id, user_id, created_at) 
+
+-  parameters (id, name, unit, min_val, max_val) с 5 параметрами: температура (-50..50), влажность (0..100), давление (700..800), скорость ветра (0..30), осадки (0..50). 
+
+-  measurements (id, batch_id, parameter_id, value) 
