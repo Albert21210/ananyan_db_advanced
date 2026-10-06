@@ -1,40 +1,15 @@
-DROP TABLE IF EXISTS measurements CASCADE;
-DROP TABLE IF EXISTS measurement_batches CASCADE;
-DROP TABLE IF EXISTS parameters CASCADE;
-DROP TABLE IF EXISTS users CASCADE;
+-- Очистка таблиц и сброс счетчиков перед вставкой новых данных
+TRUNCATE TABLE measurements, measurement_batches, parameters, users RESTART IDENTITY CASCADE;
 
-CREATE TABLE users (
-    id SERIAL PRIMARY KEY,
-    username VARCHAR(100) NOT NULL
-);
-
-CREATE TABLE parameters (
-    id SERIAL PRIMARY KEY,
-    name VARCHAR(100) NOT NULL,
-    unit VARCHAR(20) NOT NULL,
-    min_val NUMERIC NOT NULL,
-    max_val NUMERIC NOT NULL
-);
-
-CREATE TABLE measurement_batches (
-    id SERIAL PRIMARY KEY,
-    user_id INT REFERENCES users(id) ON DELETE CASCADE,
-    created_at TIMESTAMP NOT NULL
-);
-
-CREATE TABLE measurements (
-    id SERIAL PRIMARY KEY,
-    batch_id INT REFERENCES measurement_batches(id) ON DELETE CASCADE,
-    parameter_id INT REFERENCES parameters(id) ON DELETE CASCADE,
-    value NUMERIC NOT NULL
-);
-
--- Вставка данных
+-- 1. Заполнение таблицы пользователей
+-- Добавлено 3 активных пользователя и 1 пользователь без измерений для проверки аналитики
 INSERT INTO users (id, username) VALUES
 (1, 'meteo_user_1'),
 (2, 'meteo_user_2'),
-(3, 'meteo_user_3');
+(3, 'meteo_user_3'),
+(4, 'meteo_user_4');
 
+-- 2. Заполнение таблицы метеорологических параметров с допустимыми диапазонами
 INSERT INTO parameters (id, name, unit, min_val, max_val) VALUES
 (1, 'Температура', '°C', -50, 50),
 (2, 'Влажность', '%', 0, 100),
@@ -42,6 +17,7 @@ INSERT INTO parameters (id, name, unit, min_val, max_val) VALUES
 (4, 'Скорость ветра', 'м/с', 0, 30),
 (5, 'Уровень осадков', 'мм', 0, 50);
 
+-- 3. Заполнение пачек измерений, привязанных к пользователям и датам
 INSERT INTO measurement_batches (id, user_id, created_at) VALUES
 (1, 1, '2026-06-01 10:00:00'),
 (2, 1, '2026-06-02 10:00:00'),
@@ -50,10 +26,13 @@ INSERT INTO measurement_batches (id, user_id, created_at) VALUES
 (5, 3, '2026-06-01 12:00:00'),
 (6, 3, '2026-06-02 12:00:00');
 
+-- 4. Заполнение конкретных измерений для каждой пачки
 INSERT INTO measurements (batch_id, parameter_id, value) VALUES
 (1, 1, 20.5), (1, 2, 45.0), (1, 3, 750.0), (1, 4, 5.2), (1, 5, 0.0),
 (2, 1, 22.1), (2, 2, 50.0), (2, 3, 755.0), (2, 4, 3.1), (2, 5, 1.2),
 (3, 1, -10.0), (3, 2, 80.0), (3, 3, 720.0), (3, 4, 12.5), (3, 5, 15.0),
 (4, 1, -5.0), (4, 2, 75.0), (4, 3, 725.0), (4, 4, 8.0), (4, 5, 5.5),
 (5, 1, 15.0), (5, 2, 60.0), (5, 3, 760.0), (5, 4, 2.0), (5, 5, 0.0),
-(6, 1, 18.2), (6, 2, 55.0), (6, 3, 762.1), (6, 4, 4.5), (6, 5, 0.5);
+(6, 1, 18.2), (6, 2, 55.0), (6, 3, 762.1), (6, 4, 4.5), (6, 5, 0.5),
+-- Аномальное значение температуры (60.0 при максимуме 50.0) для проверки диапазона
+(1, 1, 60.0);
