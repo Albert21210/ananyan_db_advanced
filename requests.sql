@@ -4,8 +4,8 @@ SELECT
     u.username, 
     COUNT(m.id) AS total_measurements
 FROM users u
-JOIN measurement_batches b ON u.id = b.user_id
-JOIN measurements m ON b.id = m.batch_id
+LEFT JOIN measurement_batches b ON u.id = b.user_id
+LEFT JOIN measurements m ON b.id = m.batch_id
 GROUP BY u.id, u.username
 ORDER BY u.id;
 
@@ -21,9 +21,10 @@ ORDER BY b.id;
 -- 3. Проверка полноты параметров (по 5 шт) в каждой пачке
 SELECT 
     b.id AS batch_id, 
-    COUNT(m.parameter_id) AS param_count
+    COUNT(m.parameter_id) AS param_count,
+    (COUNT(m.parameter_id) = 5) AS is_complete
 FROM measurement_batches b
-JOIN measurements m ON b.id = m.batch_id
+LEFT JOIN measurements m ON b.id = m.batch_id
 GROUP BY b.id
 ORDER BY b.id;
 
