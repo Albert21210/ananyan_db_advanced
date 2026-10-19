@@ -9,58 +9,82 @@ BEGIN
             y1 NUMERIC
         );
     END IF;
+
+    -- Создание таблицы-справочника опорных температур и значений
+    CREATE TABLE IF NOT EXISTS temperature_points (
+        temp NUMERIC PRIMARY KEY,
+        val NUMERIC NOT NULL
+    );
+
+    -- Заполнение таблицы базовыми опорными данными
+    IF NOT EXISTS (SELECT 1 FROM temperature_points LIMIT 1) THEN
+        INSERT INTO temperature_points (temp, val) VALUES
+            (-30, 1.2),
+            (-20, 1.0),
+            (0,   0.8),
+            (20,  0.6),
+            (40,  0.4);
+    END IF;
+
+    -- Функция для динамического определения интервала (x0, y0, x1, y1) из таблицы
+    CREATE OR REPLACE FUNCTION get_interpolation_interval(p_temp NUMERIC)
+    RETURNS interpolation_interval AS $fn$
+    DECLARE
+        v_result interpolation_interval;
+    BEGIN
+        -- Ищем нижнюю границу (x0, y0): максимальная точка <= p_temp
+        SELECT temp, val INTO v_result.x0, v_result.y0
+        FROM temperature_points
+        WHERE temp <= p_temp
+        ORDER BY temp DESC
+        LIMIT 1;
+
+        -- Ищем верхнюю границу (x1, y1): минимальная точка > p_temp
+        SELECT temp, val INTO v_result.x1, v_result.y1
+        FROM temperature_points
+        WHERE temp > p_temp
+        ORDER BY temp ASC
+        LIMIT 1;
+
+        -- Обработка граничных случаев (если точка выходит за пределы таблицы)
+        IF v_result.x0 IS NULL THEN
+            SELECT temp, val INTO v_result.x0, v_result.y0 FROM temperature_points ORDER BY temp ASC LIMIT 1 OFFSET 0;
+            SELECT temp, val INTO v_result.x1, v_result.y1 FROM temperature_points ORDER BY temp ASC LIMIT 1 OFFSET 1;
+        ELSIF v_result.x1 IS NULL THEN
+            SELECT temp, val INTO v_result.x0, v_result.y0 FROM temperature_points ORDER BY temp DESC LIMIT 1 OFFSET 1;
+            SELECT temp, val INTO v_result.x1, v_result.y1 FROM temperature_points ORDER BY temp DESC LIMIT 1 OFFSET 0;
+        END IF;
+
+        RETURN v_result;
+    END;
+    $fn$ LANGUAGE plpgsql;
+
+    -- Функция расчёта линейной интерполяции
+    CREATE OR REPLACE FUNCTION calculate_interpolation(p_x NUMERIC, p_interval interpolation_interval)
+    RETURNS NUMERIC AS $fn$
+    BEGIN
+        IF p_interval.x1 = p_interval.x0 THEN
+            RETURN p_interval.y0;
+        END IF;
+        RETURN p_interval.y0 + (p_x - p_interval.x0) * (p_interval.y1 - p_interval.y0) / (p_interval.x1 - p_interval.x0);
+    END;
+    $fn$ LANGUAGE plpgsql;
+
 END $$;
-
-
--- Создание функции для определения параметров (интервала) по температуре
-CREATE OR REPLACE FUNCTION get_interpolation_interval(p_temp NUMERIC)
-RETURNS interpolation_interval AS $$
-DECLARE
-    v_result interpolation_interval;
-BEGIN
-    -- Логика выбора опорных точек (интервала) в зависимости от температуры
-    IF p_temp <= -20 THEN
-        v_result := (-30, 1.2, -20, 1.0);
-    ELSIF p_temp <= 0 THEN
-        v_result := (-20, 1.0, 0, 0.8);
-    ELSIF p_temp <= 20 THEN
-        v_result := (0, 0.8, 20, 0.6);
-    ELSE
-        v_result := (20, 0.6, 40, 0.4);
-    END IF;
-    
-    RETURN v_result;
-END;
-$$ LANGUAGE plpgsql;
-
-
--- Создание функции для расчета интерполяции
-CREATE OR REPLACE FUNCTION calculate_interpolation(p_x NUMERIC, p_interval interpolation_interval)
-RETURNS NUMERIC AS $$
-DECLARE
-    v_y NUMERIC;
-BEGIN
-    -- Защита от деления на ноль, если x1 равно x0
-    IF p_interval.x1 = p_interval.x0 THEN
-        RETURN p_interval.y0;
-    END IF;
-    
-    -- Формула линейной интерполяции: y = y0 + (x - x0) * (y1 - y0) / (x1 - x0)
-    v_y := p_interval.y0 + (p_x - p_interval.x0) * (p_interval.y1 - p_interval.y0) / (p_interval.x1 - p_interval.x0);
-    
-    RETURN v_y;
-END;
-$$ LANGUAGE plpgsql;
 
 
 -- Проверочный скрипт
 SELECT 
-    t.val AS "Температура (x)",
-    (get_interpolation_interval(t.val)).x0 AS "x0",
-    (get_interpolation_interval(t.val)).y0 AS "y0",
-    (get_interpolation_interval(t.val)).x1 AS "x1",
-    (get_interpolation_interval(t.val)).y1 AS "y1",
-    calculate_interpolation(t.val, get_interpolation_interval(t.val)) AS "Результат (y)"
+    t.test_temp AS "Температура (х)",
+    (get_interpolation_interval(t.test_temp)).x0 AS "x0",
+    (get_interpolation_interval(t.test_temp)).y0 AS "y0",
+    (get_interpolation_interval(t.test_temp)).x1 AS "x1",
+    (get_interpolation_interval(t.test_temp)).y1 AS "y1",
+    calculate_interpolation(t.test_temp, get_interpolation_interval(t.test_temp)) AS "Результат (y)"
 FROM (
-    VALUES (-25::NUMERIC), (-10::NUMERIC), (10::NUMERIC), (30::NUMERIC)
-) AS t(val);
+    VALUES 
+        (-25::NUMERIC), 
+        (-10::NUMERIC), 
+        (10::NUMERIC), 
+        (30::NUMERIC)
+) AS t(test_temp);
