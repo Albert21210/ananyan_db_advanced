@@ -1,59 +1,52 @@
--- Создание таблицы для хранения пакетов метеоданных
-CREATE TABLE IF NOT EXISTS meteo_packets (
-    id SERIAL PRIMARY KEY,
-    batch_code INT NOT NULL,           -- Код пачки 
-    equipment_type TEXT NOT NULL,      -- Тип оборудования (например, АП-11)
-    station_height NUMERIC NOT NULL,   -- Высота метеопоста
-    temperature NUMERIC NOT NULL,      -- Температура
-    pressure NUMERIC NOT NULL,         -- Давление
-    wind_direction NUMERIC NOT NULL,   -- Направление ветра
-    wind_speed NUMERIC NOT NULL,       -- Скорость ветра
-    bullet_drift NUMERIC NOT NULL      -- Дальность сноса пуль
-);
+-- Получение исходных данных из таблиц первой миграции
+WITH source_data AS (
+    SELECT
+        b.batch_id,
+        b.batch_code,
+        e.type_name,
+        p.param_name,
+        b.param_value,
+        CASE p.param_name
+            WHEN 'Высота метеопоста' THEN 'station_height'
+            WHEN 'Температура' THEN 'temperature'
+            WHEN 'Давление' THEN 'pressure'
+            WHEN 'Атмосферное давление' THEN 'pressure'
+            WHEN 'Направление ветра' THEN 'wind_direction'
+            WHEN 'Скорость ветра' THEN 'wind_speed'
+            WHEN 'Дальность сноса пуль' THEN 'bullet_drift'
+        END AS rule_name
+    FROM batches b
+    LEFT JOIN equipment_types e
+        ON e.equipment_type_id = b.equipment_type_id
+    LEFT JOIN parameters p ON p.parameter_id = b.parameter_id
+),
 
--- Заполнение тестовыми данными
-INSERT INTO meteo_packets (batch_code, equipment_type, station_height, temperature, pressure, wind_direction, wind_speed, bullet_drift) 
-SELECT 101, 'АП-11', 150, -20, 760, 180, 10, 5 WHERE NOT EXISTS (SELECT 1 FROM meteo_packets WHERE batch_code = 101);
-
-INSERT INTO meteo_packets (batch_code, equipment_type, station_height, temperature, pressure, wind_direction, wind_speed, bullet_drift) 
-SELECT 102, 'АП-11', -50, -75, 760, 400, 10, 5 WHERE NOT EXISTS (SELECT 1 FROM meteo_packets WHERE batch_code = 102);
-
-INSERT INTO meteo_packets (batch_code, equipment_type, station_height, temperature, pressure, wind_direction, wind_speed, bullet_drift) 
-SELECT 103, 'МТ-1',  300,  15, 300,  90,  5,  2 WHERE NOT EXISTS (SELECT 1 FROM meteo_packets WHERE batch_code = 103);
-
-
--- Основной запрос "Список параметров с ошибками" с использованием CTE
-WITH evaluated_packets AS (
-    SELECT 
-        batch_code,
-        equipment_type,
-        station_height,
-        temperature,
-        pressure,
-        wind_direction,
-        wind_speed,
-        bullet_drift,
-        -- Передача поля как композитный тип meteo_input_params в функцию валидации
-        check_meteo_parameters(
-            (equipment_type, station_height, temperature, pressure, wind_direction, wind_speed, bullet_drift)::meteo_input_params
-        ) AS error_result
-    FROM meteo_packets
+-- Проверка имеющихся числовых значений по таблице правил
+checked AS (
+    SELECT d.*,
+        CASE
+            WHEN r.param_name IS NULL
+                THEN 'Нет правила для параметра: ' || COALESCE(d.param_name, 'неизвестен')
+            WHEN d.param_value::NUMERIC < r.min_val
+              OR d.param_value::NUMERIC > r.max_val
+                THEN COALESCE(r.error_message, 'Значение вне диапазона')
+        END AS error
+    FROM source_data d
+    LEFT JOIN meteo_validation_rules r ON r.param_name = d.rule_name
 )
 
--- Извлечение данных из временного набора CTE и вывод таблицы
-SELECT 
+-- Извлечение данных из набора и вывод таблицы
+SELECT
     batch_code AS "№",
-    equipment_type AS "Тип оборудования",
-    station_height AS "Высота метеопоста",
-    temperature AS "Температура",
-    pressure AS "Давление",
-    wind_direction AS "Направление ветра",
-    wind_speed AS "Скорость ветра",
-    bullet_drift AS "Дальность сноса пуль",
-    -- Флаг: Есть ошибка
-    CASE 
-        WHEN error_result = 'Ошибок нет' THEN 'Нет'
-        ELSE 'Да'
-    END AS "Флаг: Есть ошибка",
-    error_result AS "Описание ошибки"
-FROM evaluated_packets;
+    type_name AS "Тип оборудования",
+    MAX(CASE WHEN rule_name = 'station_height' THEN param_value END) AS "Высота метеопоста",
+    MAX(CASE WHEN rule_name = 'temperature' THEN param_value END) AS "Температура",
+    MAX(CASE WHEN rule_name = 'pressure' THEN param_value END) AS "Давление",
+    MAX(CASE WHEN rule_name = 'wind_direction' THEN param_value END) AS "Направление ветра",
+    MAX(CASE WHEN rule_name = 'wind_speed' THEN param_value END) AS "Скорость ветра",
+    MAX(CASE WHEN rule_name = 'bullet_drift' THEN param_value END) AS "Дальность сноса пуль",
+    COUNT(error) > 0 AS "Флаг: Есть ошибка",
+    COALESCE(string_agg(error, '; '), 'Ошибок в имеющихся значениях нет') AS "Описание ошибки"
+FROM checked
+GROUP BY batch_code, type_name
+ORDER BY batch_code, type_name;
