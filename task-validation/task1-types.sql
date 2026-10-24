@@ -1,97 +1,69 @@
--- Тип для параметров
-DROP TYPE IF EXISTS meteo_input_params CASCADE;
-CREATE TYPE meteo_input_params AS (
-    equipment_type TEXT,
-    station_height NUMERIC,
-    temperature NUMERIC,
-    pressure NUMERIC,
-    wind_direction NUMERIC,
-    wind_speed NUMERIC,
-    bullet_drift NUMERIC
-);
-COMMENT ON TYPE meteo_input_params IS 'Тип данных для передачи метеопакетов';
-
--- Создание таблицы для хранения граничных условий
-CREATE TABLE IF NOT EXISTS meteo_validation_rules (
-    param_name VARCHAR(50) PRIMARY KEY,
-    min_val NUMERIC NOT NULL,
-    max_val NUMERIC NOT NULL,
-    error_message TEXT NOT NULL
-);
-COMMENT ON TABLE meteo_validation_rules IS 'Справочник допустимых диапазонов для валидации';
-
--- Заполнение справочника правил
 DO $$
 BEGIN
-    INSERT INTO meteo_validation_rules (param_name, min_val, max_val, error_message) VALUES
-        ('station_height', 0, 5000, 'Ошибка: Неверная высота'),
-        ('temperature', -60, 60, 'Ошибка: Неверная температура'),
-        ('pressure', 400, 800, 'Ошибка: Неверное давление'),
-        ('wind_direction', 0, 360, 'Ошибка: Неверный ветер (направление)'),
-        ('wind_speed', 0, 50, 'Ошибка: Неверная скорость ветра'),
-        ('bullet_drift', -500, 500, 'Ошибка: Неверный снос пуль')
-    ON CONFLICT (param_name) DO UPDATE 
-    SET min_val = EXCLUDED.min_val, 
-        max_val = EXCLUDED.max_val, 
-        error_message = EXCLUDED.error_message;
-END;
-$$;
+    -- Тип для параметров
+    BEGIN
+        IF to_regtype('meteo_input_params') IS NULL THEN
+            CREATE TYPE meteo_input_params AS (
+                equipment_type TEXT, station_height NUMERIC,
+                temperature NUMERIC, pressure NUMERIC,
+                wind_direction NUMERIC, wind_speed NUMERIC, bullet_drift NUMERIC
+            );
+        END IF;
+        COMMENT ON TYPE meteo_input_params IS 'Входные метеопараметры';
 
--- Функция проверки на ошибки
-CREATE OR REPLACE FUNCTION check_meteo_parameters(p meteo_input_params)
-RETURNS TEXT AS $$
-DECLARE
-    r RECORD;
-BEGIN
-    -- Проверка высоты станции
-    SELECT min_val, max_val, error_message INTO r FROM meteo_validation_rules WHERE param_name = 'station_height';
-    IF p.station_height < r.min_val OR p.station_height > r.max_val THEN 
-        RETURN r.error_message; 
-    END IF;
+        -- Создание таблицы для хранения граничных условий
+        CREATE TABLE IF NOT EXISTS meteo_validation_rules (
+            param_name VARCHAR(50) PRIMARY KEY,
+            min_val NUMERIC NOT NULL, max_val NUMERIC NOT NULL,
+            error_message TEXT NOT NULL
+        );
+        COMMENT ON TABLE meteo_validation_rules IS 'Правила проверки параметров';
 
-    -- Проверка температуры
-    SELECT min_val, max_val, error_message INTO r FROM meteo_validation_rules WHERE param_name = 'temperature';
-    IF p.temperature < r.min_val OR p.temperature > r.max_val THEN 
-        RETURN r.error_message; 
-    END IF;
+        -- Заполние правил проверки
+        INSERT INTO meteo_validation_rules VALUES
+            ('station_height', 0, 5000, 'Неверная высота'),
+            ('temperature', -60, 60, 'Неверная температура'),
+            ('pressure', 400, 800, 'Неверное давление'),
+            ('wind_direction', 0, 360, 'Неверное направление ветра'),
+            ('wind_speed', 0, 50, 'Неверная скорость ветра'),
+            ('bullet_drift', -500, 500, 'Неверный снос пуль')
+        ON CONFLICT (param_name) DO UPDATE
+        SET min_val = EXCLUDED.min_val, max_val = EXCLUDED.max_val,
+            error_message = EXCLUDED.error_message;
 
-    -- Проверка давления
-    SELECT min_val, max_val, error_message INTO r FROM meteo_validation_rules WHERE param_name = 'pressure';
-    IF p.pressure < r.min_val OR p.pressure > r.max_val THEN 
-        RETURN r.error_message; 
-    END IF;
+        -- Проверка значений и объединие всех ошибкок в строку
+        CREATE OR REPLACE FUNCTION check_meteo_parameters(p meteo_input_params)
+        RETURNS TEXT LANGUAGE plpgsql AS $f$
+        DECLARE
+            errors TEXT;
+        BEGIN
+            WITH data(name, value) AS (
+                VALUES ('station_height', p.station_height),
+                       ('temperature', p.temperature), ('pressure', p.pressure),
+                       ('wind_direction', p.wind_direction),
+                       ('wind_speed', p.wind_speed), ('bullet_drift', p.bullet_drift)
+            )
+            SELECT string_agg(CASE
+                WHEN r.param_name IS NULL THEN 'Нет правила: ' || d.name
+                WHEN d.value IS NULL OR d.value < r.min_val
+                    OR d.value > r.max_val THEN r.error_message
+                END, '; ' ORDER BY d.name)
+            INTO errors
+            FROM data d LEFT JOIN meteo_validation_rules r ON r.param_name = d.name;
 
-    -- Проверка направления ветра
-    SELECT min_val, max_val, error_message INTO r FROM meteo_validation_rules WHERE param_name = 'wind_direction';
-    IF p.wind_direction < r.min_val OR p.wind_direction > r.max_val THEN 
-        RETURN r.error_message; 
-    END IF;
+            IF p.equipment_type IS NULL OR p.equipment_type = '' THEN
+                errors := 'Не указан тип оборудования; ' || COALESCE(errors, '');
+            END IF;
+            RETURN COALESCE(errors, 'Ошибок нет');
+        END;
+        $f$;
+        COMMENT ON FUNCTION check_meteo_parameters(meteo_input_params)
+            IS 'Возвращает все ошибки по табличным правилам';
+    END;
 
-    -- Проверка скорости ветра
-    SELECT min_val, max_val, error_message INTO r FROM meteo_validation_rules WHERE param_name = 'wind_speed';
-    IF p.wind_speed < r.min_val OR p.wind_speed > r.max_val THEN 
-        RETURN r.error_message; 
-    END IF;
-
-    -- Проверка сноса пуль
-    SELECT min_val, max_val, error_message INTO r FROM meteo_validation_rules WHERE param_name = 'bullet_drift';
-    IF p.bullet_drift < r.min_val OR p.bullet_drift > r.max_val THEN 
-        RETURN r.error_message; 
-    END IF;
-
-    RETURN 'Ошибок нет';
+    -- Вывод результата
+    RAISE NOTICE '%', check_meteo_parameters(
+        ('АП-11', 150, -25, 760, 180, 10, 5)::meteo_input_params
+    );
 END;
 $$ LANGUAGE plpgsql;
-COMMENT ON FUNCTION check_meteo_parameters(meteo_input_params) IS 'Функция валидации метеопараметров по справочнику правил';
-
--- Проверка
-DO $$
-DECLARE
-    v_test meteo_input_params;
-    v_result TEXT;
-BEGIN
-    v_test := ROW('АП-11', 150, -25, 760, 180, 10, 5)::meteo_input_params;
-    v_result := check_meteo_parameters(v_test);
-    RAISE NOTICE 'Результат проверки: %', v_result;
-END;
-$$;
